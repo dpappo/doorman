@@ -1,0 +1,16 @@
+# Secrets and personal settings: never commit these
+nest-config.json
+openrouter-key.txt
+
+# Build output and logs
+Doorman.app/
+*.log
+task.sh
+task.done.sh
+
+# Scratch
+icon-options/
+__pycache__/
+.DS_Store
+
+docs/raw/

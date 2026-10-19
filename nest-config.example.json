@@ -1,0 +1,9 @@
+{
+  "clientId": "YOUR-CLIENT-ID.apps.googleusercontent.com",
+  "clientSecret": "YOUR-CLIENT-SECRET",
+  "redirectUri": "http://localhost:8765/callback",
+  "cloudProjectId": "YOUR-GOOGLE-CLOUD-PROJECT-ID",
+  "subscription": "projects/YOUR-GOOGLE-CLOUD-PROJECT-ID/subscriptions/doorbell-mac",
+  "deviceAccessProjectId": "YOUR-DEVICE-ACCESS-PROJECT-ID",
+  "googleHomeCameraURL": "https://home.google.com/u/0/home/YOUR-HOME/cameras/list/YOUR-CAMERA"
+}
