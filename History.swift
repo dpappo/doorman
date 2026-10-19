@@ -19,6 +19,7 @@ struct Visit: Codable, Identifiable, Hashable {
     var thumbnail: String?           // file name in Thumbnails/
     var clips: [String] = []         // file names in Event Clips/
     var analyzed: Bool = false
+    var noVideo: String?             // why there's no recording of this visit, if there isn't one
 
     init(id: String, time: Date, endTime: Date, kinds: [String]) {
         self.id = id; self.time = time; self.endTime = endTime; self.kinds = kinds
@@ -42,6 +43,7 @@ struct Visit: Codable, Identifiable, Hashable {
         thumbnail = try c.decodeIfPresent(String.self, forKey: .thumbnail)
         clips = try c.decodeIfPresent([String].self, forKey: .clips) ?? []
         analyzed = try c.decodeIfPresent(Bool.self, forKey: .analyzed) ?? false
+        noVideo = try c.decodeIfPresent(String.self, forKey: .noVideo)
     }
 
     var mainKind: String {
@@ -312,6 +314,22 @@ final class HistoryStore: ObservableObject {
         segments.filter { $0.end > from && $0.start < to }
     }
 
+    // Is there saved video of this moment?
+    func hasFootage(at t: Date) -> Bool { !segments(from: t.addingTimeInterval(-2), to: t.addingTimeInterval(2)).isEmpty }
+
+    // A still frame from the recordings at a given moment.
+    func frame(at t: Date, maxSide: CGFloat = 1280) async -> CGImage? {
+        guard let seg = segments(from: t, to: t.addingTimeInterval(0.5)).first else { return nil }
+        let gen = AVAssetImageGenerator(asset: AVURLAsset(url: seg.url))
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: maxSide, height: maxSide)
+        gen.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
+        gen.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
+        let at = CMTime(seconds: max(0, t.timeIntervalSince(seg.start)), preferredTimescale: 600)
+        if #available(macOS 13.0, *) { return try? await gen.image(at: at).image }
+        return try? gen.copyCGImage(at: at, actualTime: nil)
+    }
+
     // A player for a stretch of footage, starting `lead` seconds before `from`.
     // The one-minute files are joined into a single timeline so the scrubber covers the whole stretch.
     func player(from: Date, to: Date, lead: TimeInterval = 5) async -> AVPlayer? {
@@ -373,6 +391,7 @@ final class HistoryStore: ObservableObject {
         }
         let v = Visit(id: UUID().uuidString, time: time, endTime: time, kinds: [kind])
         visits.insert(v, at: 0)
+        visits.sort { $0.time > $1.time }      // events can arrive late (e.g. after the Mac wakes)
         protectClipsForRecentVisits()
         save()
         if analyze { onVisitCreated?(v) }

@@ -382,11 +382,18 @@ struct VisitDetail: View {
                     } else {
                         Thumb(url: history.thumbnailURL(visit), width: 380, radius: 0).opacity(0.85)
                         if loading {
-                            ProgressView().controlSize(.small)
+                            VStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                if waitingForSave {
+                                    Text("Saving the video…").font(.caption).foregroundStyle(.white.opacity(0.8))
+                                }
+                            }
                         } else {
-                            Label("No video for this event", systemImage: "video.slash")
+                            Label(visit.noVideo ?? "No video for this event",
+                                  systemImage: (visit.noVideo ?? "").contains("asleep") ? "moon.zzz.fill" : "video.slash")
                                 .font(.caption.weight(.medium))
-                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 12).padding(.vertical, 6)
                                 .background(.ultraThinMaterial, in: Capsule())
                                 .frame(maxHeight: .infinity, alignment: .bottom).padding(10)
                         }
@@ -457,9 +464,13 @@ struct VisitDetail: View {
         }
         .onAppear { load() }
         .onChange(of: visit.id) { _ in load() }
-        .onChange(of: visit.clips) { _ in if player == nil { load() } }
+        .onChange(of: visit.clips) { _ in if player == nil { loadedFor = ""; load() } }
+        .onChange(of: visit.noVideo) { _ in if player == nil { loadedFor = ""; load() } }
+        .onReceive(history.$usedBytes) { _ in if player == nil && waitingForSave { loadedFor = ""; load() } }
         .onDisappear { player?.pause() }
     }
+
+    @State private var waitingForSave = false
 
     private func load() {
         let key = visit.id + "\(visit.clips.count)"
@@ -467,8 +478,16 @@ struct VisitDetail: View {
         player?.pause()
         player = nil
         loadedFor = key
-        loading = true
         let v = visit
+        // Only show video that actually covers the moment of the visit.
+        guard v.noVideo == nil, history.hasFootage(at: v.time) else {
+            // A brand-new visit: its minute of video is still being written.
+            waitingForSave = v.noVideo == nil && Date().timeIntervalSince(v.time) < 120
+            loading = waitingForSave
+            return
+        }
+        waitingForSave = false
+        loading = true
         Task {
             let p = await history.player(from: v.time, to: v.endTime.addingTimeInterval(30))
             if loadedFor == key { player = p; loading = false }

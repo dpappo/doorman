@@ -23,10 +23,18 @@ video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;backgro
   pc.addTransceiver('audio', { direction: 'recvonly' });
   pc.addTransceiver('video', { direction: 'recvonly' });
   pc.createDataChannel('dataSendChannel');
-  var stream = new MediaStream(), recorder = null, recording = false;
+  var stream = new MediaStream(), recorder = null, recording = false, shown = false, started = false;
   pc.ontrack = function (e) { stream.addTrack(e.track); v.srcObject = stream; };
+  // A playing video keeps the Mac's screen awake, so the stream is only put on screen
+  // while the live view is open or a frame is being grabbed. Recording doesn't need it.
+  function attachVideo() { if (v.srcObject !== stream) { v.srcObject = stream; } v.play().catch(function () {}); }
+  function detachVideo() { if (v.srcObject) { v.pause(); v.srcObject = null; } }
+  window.setDisplay = function (on) { shown = on; if (on) attachVideo(); else detachVideo(); };
   v.addEventListener('playing', function () {
     msg.style.display = 'none';
+    if (started) return;
+    started = true;
+    setTimeout(function () { if (!shown) detachVideo(); }, 4000);
     post({ kind: 'playing' });
     post({ kind: 'debug', text: 'MediaRecorder=' + (typeof window.MediaRecorder) + ' type=' + pickType() +
       ' tracks=' + stream.getTracks().map(function (t) { return t.kind + ':' + t.readyState; }).join(',') });
@@ -91,6 +99,22 @@ video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;backgro
     c.width = Math.round(v.videoWidth * s); c.height = Math.round(v.videoHeight * s);
     c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
     return c.toDataURL('image/jpeg', 0.9);
+  };
+  window.grabFrame = async function (maxSide) {
+    var temp = !v.srcObject;
+    if (temp) {
+      attachVideo();
+      await new Promise(function (resolve) {
+        var done = false;
+        function finish() { if (!done) { done = true; resolve(); } }
+        v.addEventListener('playing', finish, { once: true });
+        setTimeout(finish, 2000);
+      });
+      await new Promise(function (r) { setTimeout(r, 200); });
+    }
+    var out = window.captureFrame(maxSide);
+    if (temp && !shown) detachVideo();
+    return out;
   };
   window.setMuted = function (m) { v.muted = m; };
   window.setAnswer = function (sdp) {
@@ -217,6 +241,17 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
         extending = false
     }
 
+    // Reconnect right away (e.g. after the Mac wakes, when the old stream is certainly gone).
+    func restartNow(_ reason: String) {
+        guard running else { return }
+        DebugLog.write("engine restart: \(reason)")
+        streaming = false
+        stopSession()
+        failures = 0
+        restartAt = Date()
+        onStateChange?()
+    }
+
     private func restartSoon(_ reason: String) {
         guard running else { return }
         DebugLog.write("engine restart: \(reason)")
@@ -273,6 +308,7 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
         if let sibling { container.addSubview(webView, positioned: .below, relativeTo: sibling) }
         else { container.addSubview(webView) }
         attached = true
+        webView.evaluateJavaScript("window.setDisplay && window.setDisplay(true)", completionHandler: nil)
         // Moving a playing video between windows can leave it blank until it redraws; nudge it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, self.attached, let sv = self.webView.superview else { return }
@@ -285,6 +321,7 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
     func detach() {
         guard attached else { return }
         setMuted(true)
+        webView.evaluateJavaScript("window.setDisplay && window.setDisplay(false)", completionHandler: nil)
         webView.removeFromSuperview()
         webView.frame = holder.contentView!.bounds
         holder.contentView?.addSubview(webView)
@@ -299,8 +336,9 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
     func captureFrame(maxSide: Int = 1280) async -> CGImage? {
         guard isReady else { return nil }
         let result: Any? = await withCheckedContinuation { cont in
-            webView.evaluateJavaScript("window.captureFrame ? window.captureFrame(\(maxSide)) : ''") { value, _ in
-                cont.resume(returning: value)
+            webView.callAsyncJavaScript("return window.grabFrame ? await window.grabFrame(m) : ''",
+                                        arguments: ["m": maxSide], in: nil, in: .page) { r in
+                cont.resume(returning: try? r.get())
             }
         }
         guard let url = result as? String, let comma = url.firstIndex(of: ","),
@@ -334,6 +372,7 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
                 }
             }
         case "playing":
+            if attached { webView.evaluateJavaScript("window.setDisplay && window.setDisplay(true)", completionHandler: nil) }
             streaming = true
             failures = 0
             lastError = nil

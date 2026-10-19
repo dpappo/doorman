@@ -411,6 +411,23 @@ struct DoorHistoryTool: Tool {
     }
 }
 
+// Keeps the most useful of several frames and merges what Vision saw in all of them.
+struct FrameAccumulator {
+    var best: (CGImage, FrameFacts)?
+    var merged = FrameFacts()
+    mutating func add(_ frame: CGImage) async {
+        let facts = await Task.detached(priority: .userInitiated) { VisionAnalyzer.analyze(frame) }.value
+        DebugLog.write("visit facts: people=\(facts.people) faces=\(facts.faces.count) labels=\(facts.labels.keys.sorted().prefix(8))")
+        merged.people = max(merged.people, facts.people)
+        for (k, c) in facts.labels { merged.labels[k] = max(merged.labels[k] ?? 0, c) }
+        merged.animals = Array(Set(merged.animals + facts.animals)).sorted()
+        merged.text += facts.text
+        merged.faces += facts.faces
+        let score = facts.faces.count * 3 + facts.people
+        if best == nil || score > (best!.1.faces.count * 3 + best!.1.people) { best = (frame, facts) }
+    }
+}
+
 // MARK: - Coordinator
 
 @MainActor
@@ -449,35 +466,64 @@ final class Intelligence: ObservableObject {
 
     // MARK: Visit analysis
 
+    // Was the Mac asleep at this moment? (Set by the app.)
+    var wasAsleep: ((Date) -> Bool)?
+
     func analyze(visitId: String) {
         Task {
-            // A few frames over the first seconds of the visit; keep the most informative.
-            var best: (CGImage, FrameFacts)?
-            var merged = FrameFacts()
+            guard let v = history.visit(visitId) else { return }
             // If the camera stream is (re)connecting, give it a moment.
-            for _ in 0..<40 where !engine.isReady { try? await Task.sleep(nanoseconds: 500_000_000) }
+            for _ in 0..<20 where !engine.isReady && Date().timeIntervalSince(v.time) < 15 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            // The live picture only shows the visit if we're looking right away. Otherwise
+            // (a late event, or the stream was down) use the recording of that moment.
+            if !engine.isReady || Date().timeIntervalSince(v.time) > 15 {
+                await analyzeFromRecording(visitId: visitId)
+                return
+            }
+            var acc = FrameAccumulator()
             for delay in [0.8, 2.5, 2.5] {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 guard let frame = await engine.captureFrame(maxSide: 1280) else {
                     DebugLog.write("visit frame: none (engine ready=\(engine.isReady))")
                     continue
                 }
-                DebugLog.write("visit frame: \(frame.width)x\(frame.height)")
-                let facts = await Task.detached(priority: .userInitiated) { VisionAnalyzer.analyze(frame) }.value
-                DebugLog.write("visit facts: people=\(facts.people) faces=\(facts.faces.count) labels=\(facts.labels.keys.sorted().prefix(8)) text=\(facts.text.prefix(3))")
-                merged.people = max(merged.people, facts.people)
-                for (k, c) in facts.labels { merged.labels[k] = max(merged.labels[k] ?? 0, c) }
-                merged.animals = Array(Set(merged.animals + facts.animals)).sorted()
-                merged.text += facts.text
-                merged.faces += facts.faces
-                let score = facts.faces.count * 3 + facts.people
-                if best == nil || score > (best!.1.faces.count * 3 + best!.1.people) { best = (frame, facts) }
+                await acc.add(frame)
             }
-            await finish(visitId: visitId, best: best?.0, facts: merged)
+            await finish(visitId: visitId, best: acc.best?.0, facts: acc.merged)
             // A minute later, check whether something was left on the porch.
             try? await Task.sleep(nanoseconds: 60_000_000_000)
             await checkForPackage(visitId: visitId)
         }
+    }
+
+    // Looks at the saved video from the moment of the visit.
+    private func analyzeFromRecording(visitId: String) async {
+        guard let v = history.visit(visitId) else { return }
+        // The minute of video covering the visit may still be being saved; wait for it.
+        var waited = 0.0
+        while !history.hasFootage(at: v.time.addingTimeInterval(2)) && waited < 100
+                && Date().timeIntervalSince(v.time) < 150 {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            waited += 5
+        }
+        guard history.hasFootage(at: v.time.addingTimeInterval(2)) else {
+            let reason = (wasAsleep?(v.time) ?? false)
+                ? "Your Mac was asleep, so Doorman couldn't record this visit."
+                : "Doorman wasn't recording at that moment, so there's no video of this visit."
+            DebugLog.write("visit \(v.time): no footage (\(reason))")
+            history.update(visitId) { $0.noVideo = reason; $0.analyzed = true }
+            if let updated = history.visit(visitId) { onVisitUpdated?(updated) }
+            return
+        }
+        var acc = FrameAccumulator()
+        for offset in [1.0, 3.0, 5.0, 8.0] {
+            guard let frame = await history.frame(at: v.time.addingTimeInterval(offset)) else { continue }
+            await acc.add(frame)
+        }
+        DebugLog.write("visit \(v.time): analyzed from recording, people=\(acc.merged.people)")
+        await finish(visitId: visitId, best: acc.best?.0, facts: acc.merged)
     }
 
     private func finish(visitId: String, best: CGImage?, facts: FrameFacts) async {

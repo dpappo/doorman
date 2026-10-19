@@ -420,7 +420,7 @@ final class NestLink {
     var deviceNames: [String] = []
     var cameraDevice: String?          // e.g. enterprises/…/devices/… (supports WebRTC live view)
     var onChange: (() -> Void)?
-    var onEvent: ((String) -> Void)?
+    var onEvent: ((String, Date) -> Void)?       // kind, when it happened (Google's timestamp)
 
     private let config: NestConfig?
     private var accessToken: String?
@@ -684,6 +684,12 @@ final class NestLink {
         Task { await pullLoop() }
     }
 
+    // After sleep: drop requests that were open before (they're dead) and reconnect now.
+    func wake() {
+        session.getAllTasks { tasks in tasks.forEach { $0.cancel() } }
+        kick()
+    }
+
     // After sleep, try again straight away instead of waiting out a back-off.
     func kick() {
         if pulling { wakeUp = true } else if NestTokenStore.read() != nil { startPulling() }
@@ -749,9 +755,10 @@ final class NestLink {
               let update = json["resourceUpdate"] as? [String: Any],
               let events = update["events"] as? [String: Any] else { return }
 
-        // Ignore anything stale (e.g. delivered after the Mac was asleep).
-        if let ts = json["timestamp"] as? String, let when = Self.parseDate(ts),
-           Date().timeIntervalSince(when) > 120 { return }
+        // When it actually happened. Events can arrive late, e.g. after the Mac wakes up;
+        // very old ones (over 6 hours) are ignored.
+        let when = (json["timestamp"] as? String).flatMap { Self.parseDate($0) } ?? Date()
+        if Date().timeIntervalSince(when) > 6 * 3600 { return }
 
         let thread = (json["eventThreadId"] as? String) ?? (json["eventId"] as? String) ?? UUID().uuidString
         for key in events.keys {
@@ -764,7 +771,7 @@ final class NestLink {
             let id = thread + "|" + kind
             if seen[id] != nil { continue }      // one pop-up per visit, not per update
             seen[id] = Date()
-            onEvent?(kind)
+            onEvent?(kind, min(when, Date()))
         }
         seen = seen.filter { Date().timeIntervalSince($0.value) < 3600 }
     }
@@ -928,7 +935,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         setUpLoginItemOnce()
         setUpPremium()
         nest.onChange = { [weak self] in self?.nestChanged() }
-        nest.onEvent = { [weak self] kind in self?.handleNestEvent(kind) }
+        nest.onEvent = { [weak self] kind, when in self?.handleNestEvent(kind, at: when) }
         nest.start()
         setUpSettings()
 
@@ -936,6 +943,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                              userInfo: nil, repeats: true)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake),
                                                           name: NSWorkspace.didWakeNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(willSleep),
+                                                          name: NSWorkspace.willSleepNotification, object: nil)
         refreshStatus()
     }
 
@@ -1621,6 +1630,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             checkAlertHealth()
         }
         if ticks % 60 == 0 { intel?.tick() }
+        // Maintenance hook: `defaults write com.dan.doorbellpip testVisit -int <seconds ago>`
+        // runs the visit analysis as if someone had been at the door then (-1 removes test visits).
+        if ticks % 3 == 0, defaults.object(forKey: "testVisit") != nil {
+            let ago = defaults.integer(forKey: "testVisit")
+            defaults.removeObject(forKey: "testVisit")
+            if ago < 0 {
+                // -1 clears every test visit from History.
+                for v in history.visits where v.kinds == ["Test visit"] { history.delete(v.id) }
+            } else {
+                history.recordEvent(kind: "Test visit", at: Date().addingTimeInterval(-Double(ago)))
+            }
+        }
         if ticks % 3 == 0, let dir = defaults.string(forKey: "snapshotDir") {
             defaults.removeObject(forKey: "snapshotDir")
             Task { await self.makeSnapshots(into: dir) }
@@ -1656,12 +1677,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if watcherPaused { nest.kick() } else { reloadWatcher() }
     }
 
+    // Sleep periods, so a visit with no video can say why.
+    var sleptAt: Date?
+    var sleeps: [(from: Date, to: Date)] = []
+
+    @objc func willSleep() {
+        sleptAt = Date()
+        DebugLog.write("mac going to sleep")
+    }
+
     @objc func didWake() {
+        let from = sleptAt ?? Date()
+        sleeps.append((from, Date()))
+        sleeps = sleeps.filter { Date().timeIntervalSince($0.to) < 2 * 86400 }
+        sleptAt = nil
+        DebugLog.write("mac woke up")
+        // Network connections don't survive sleep: reconnect everything straight away.
+        nest.wake()
+        engine?.restartNow("Mac woke up")
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             guard let self else { return }
             self.nest.kick()
+            self.updateEngine()
             if !self.watcherPaused { self.reloadWatcher() }
         }
+    }
+
+    func wasAsleep(at t: Date) -> Bool {
+        if let s = sleptAt, t >= s { return true }
+        return sleeps.contains { t >= $0.from.addingTimeInterval(-60) && t <= $0.to.addingTimeInterval(30) }
     }
 
     // MARK: Nest API
@@ -1707,6 +1751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         intel.notify = { [weak self] title, body, action, visitId in
             self?.notify(title: title, body: body, action: action, visitId: visitId)
         }
+        intel.wasAsleep = { [weak self] t in self?.wasAsleep(at: t) ?? false }
         intel.wantsDescriptiveNotification = { [weak self] id in self?.pendingDescriptive.remove(id) != nil }
         intel.onVisitUpdated = { [weak self] v in self?.showCaption(for: v) }
     }
@@ -1723,7 +1768,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
     func updateEngine() {
         guard let engine else { return }
         let want = defaults.object(forKey: "record247") as? Bool ?? true
-        if want && nest.isConnected && nest.cameraDevice != nil {
+        // Keep recording through short Google hiccups: the engine has its own retries.
+        if want && nest.cameraDevice != nil && nest.state != .notLinked && nest.state != .notConfigured {
             if !engine.running { engine.start(record: true) }
         } else if !want || nest.state == .notLinked || nest.state == .notConfigured {
             if engine.running {
@@ -1838,10 +1884,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.historyModel.objectWillChange.send() }
     }
 
-    func handleNestEvent(_ kind: String) {
-        latestEvent = (kind, Date())
+    func handleNestEvent(_ kind: String, at when: Date = Date()) {
+        let age = Date().timeIntervalSince(when)
+        DebugLog.write("nest event \(kind) \(Int(age))s old")
+        let r = history.recordEvent(kind: kind, at: when)
+        if age > 120 {
+            // Too late to pop up (the Mac was probably asleep), but a missed ring is worth knowing about.
+            if kind == "Doorbell ring" && r.isNew {
+                notify(title: "Missed doorbell ring", body: "Someone rang at \(timeString(when)) while your Mac was asleep.",
+                       action: "history", visitId: r.visit.id)
+            }
+            refreshStatus()
+            return
+        }
+        latestEvent = (kind, when)
         if kind == "Doorbell ring" { ringMenuBarBell() }
-        let r = history.recordEvent(kind: kind)
         if wants(kind) { alert(for: kind, visitId: r.visit.id) } else { prewarm() }
         refreshStatus()
     }
