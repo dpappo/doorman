@@ -342,12 +342,20 @@ final class HistoryStore: ObservableObject {
             player = AVQueuePlayer(items: segs.map { AVPlayerItem(url: $0.url) })
         }
         guard let player, let first = pieces.first else { return nil }
+        players.add(player)
         var offset = (pieces.first { $0.start > begin } ?? first).offset
         if let p = pieces.last(where: { $0.start <= begin }), begin.timeIntervalSince(p.start) < p.duration - 0.5 {
             offset = p.offset + begin.timeIntervalSince(p.start)
         }
         await player.seek(to: CMTime(seconds: offset, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         return Playback(player: player, pieces: pieces)
+    }
+
+    // Every player handed out, so closing the History window can silence them all.
+    private let players = NSHashTable<AVPlayer>.weakObjects()
+
+    func stopAllPlayback() {
+        for p in players.allObjects { p.pause() }
     }
 
     func clipURL(_ v: Visit) -> URL? { v.clips.first.map { Self.clipsDir.appendingPathComponent($0) } }

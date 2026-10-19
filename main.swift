@@ -1824,6 +1824,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             w.setFrameAutosaveName("DoorbellHistoryWindow")
             w.center()
             historyWindow = w
+            // Closing History stops any clip or recording that's playing.
+            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.history.stopAllPlayback()
+                    self?.historyModel.windowClosed += 1
+                }
+            }
         }
         NSApp.activate(ignoringOtherApps: true)
         historyWindow?.makeKeyAndOrderFront(nil)

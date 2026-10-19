@@ -25,6 +25,7 @@ final class HistoryUIModel: ObservableObject {
     @Published var draft = ""
     @Published var asking = false
     @Published var recordingsDay = Date()
+    @Published var windowClosed = 0          // bumps when the History window closes
     var chatSession: LanguageModelSession?
 
     func show(_ v: Visit) {
@@ -645,6 +646,7 @@ struct RecordingsView: View {
         .padding(24)
         .onAppear { scrub.history = history; loadDefault() }
         .onChange(of: model.recordingsDay) { _ in loadDefault() }
+        .onChange(of: model.windowClosed) { _ in scrub.playback?.player.pause() }
         .onDisappear { scrub.detach() }
     }
 
