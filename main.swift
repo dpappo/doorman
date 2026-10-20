@@ -1597,9 +1597,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             w.isReleasedWhenClosed = false
             w.center()
             settingsWindow = w
+            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateDockPresence(closing: w) }
+            }
         }
+        showInDock()
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    // While History or Settings is open, Doorman gets a Dock icon and shows up in ⌘-Tab,
+    // like a normal app. With them closed it goes back to living in the menu bar.
+    func showInDock() {
+        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+    }
+
+    func updateDockPresence(closing: NSWindow? = nil) {
+        let open = [historyWindow, settingsWindow].contains { w in
+            guard let w else { return false }
+            return w !== closing && w.isVisible
+        }
+        if !open && NSApp.activationPolicy() != .accessory {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     @objc func tick() {
@@ -1833,6 +1853,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         settingsWindow?.orderOut(nil)
         historyModel.results = nil
         historyModel.chat = []
+        if let v = history.visits.first(where: { history.hasFootage(at: $0.time) && $0.noVideo == nil }) {
+            historyModel.show(v)
+            openHistory(nil)
+            await pause(4)
+            save(historyWindow, "events")
+        }
         historyModel.section = .ask
         openHistory(nil)
         await pause(1.5)
@@ -1875,9 +1901,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                 MainActor.assumeIsolated {
                     self?.history.stopAllPlayback()
                     self?.historyModel.windowClosed += 1
+                    self?.updateDockPresence(closing: w)
                 }
             }
         }
+        showInDock()
         NSApp.activate(ignoringOtherApps: true)
         historyWindow?.makeKeyAndOrderFront(nil)
         // SwiftUI fills in the window title on its next update; prompt one.

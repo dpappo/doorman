@@ -177,7 +177,7 @@ struct EventsView: View {
     let day: String?            // nil = search results
 
     var body: some View {
-        HStack(spacing: 0) {
+        HSplitView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     if let day {
@@ -211,9 +211,7 @@ struct EventsView: View {
                 .padding(.vertical, 20)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(minWidth: 420)
-
-            Divider()
+            .frame(minWidth: 380, idealWidth: 560, maxWidth: .infinity)
 
             Group {
                 if let id = model.selectedVisit, let v = history.visit(id) {
@@ -223,7 +221,7 @@ struct EventsView: View {
                                message: "Choose an event to watch what happened.")
                 }
             }
-            .frame(width: 420)
+            .frame(minWidth: 360, idealWidth: 420, maxWidth: .infinity)
             .background(Color.primary.opacity(0.015))
         }
     }
@@ -366,6 +364,8 @@ struct VisitDetail: View {
     @ObservedObject var faces: FaceLibrary
     var onDelete: () -> Void
     @State private var player: AVPlayer?
+    @State private var playback: Playback?
+    @StateObject private var controls = PlayerModel()
     @State private var loading = false
     @State private var loadedFor = ""
     @State private var naming: String?
@@ -380,7 +380,9 @@ struct VisitDetail: View {
                     if let player {
                         PlayerView(player: player)
                     } else {
-                        Thumb(url: history.thumbnailURL(visit), width: 380, radius: 0).opacity(0.85)
+                        if let url = history.thumbnailURL(visit), let img = ImageCache.shared.image(url) {
+                            Image(nsImage: img).resizable().aspectRatio(contentMode: .fill).opacity(0.85)
+                        }
                         if loading {
                             VStack(spacing: 8) {
                                 ProgressView().controlSize(.small)
@@ -402,6 +404,10 @@ struct VisitDetail: View {
                 .aspectRatio(1, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(color: .black.opacity(0.2), radius: 8, y: 3)
+
+                if player != nil {
+                    PlayerControls(model: controls, clock: { t in playback?.date(at: t) })
+                }
 
                 HStack(spacing: 8) {
                     KindBadge(visit: visit, size: 22)
@@ -477,6 +483,8 @@ struct VisitDetail: View {
         guard loadedFor != key else { return }
         player?.pause()
         player = nil
+        playback = nil
+        controls.attach(nil)
         loadedFor = key
         let v = visit
         // Only show video that actually covers the moment of the visit.
@@ -489,8 +497,13 @@ struct VisitDetail: View {
         waitingForSave = false
         loading = true
         Task {
-            let p = await history.player(from: v.time, to: v.endTime.addingTimeInterval(30))
-            if loadedFor == key { player = p; loading = false }
+            let pb = await history.playback(from: v.time, to: v.endTime.addingTimeInterval(30), lead: 5)
+            if loadedFor == key {
+                playback = pb
+                player = pb?.player
+                controls.attach(pb?.player)
+                loading = false
+            }
         }
     }
 }
@@ -591,6 +604,7 @@ struct RecordingsView: View {
     @ObservedObject var history: HistoryStore
     @ObservedObject var model: HistoryUIModel
     @StateObject private var scrub = ScrubController()
+    @StateObject private var recControls = PlayerModel()
 
     private var dayStart: Date { Calendar.current.startOfDay(for: model.recordingsDay) }
     private var isToday: Bool { Calendar.current.isDateInToday(model.recordingsDay) }
@@ -639,6 +653,9 @@ struct RecordingsView: View {
             .aspectRatio(1, contentMode: .fit)
             .frame(maxWidth: .infinity)
             .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
+
+            PlayerControls(model: recControls, clock: { t in scrub.playback?.date(at: t) })
+                .onReceive(scrub.$playback) { pb in recControls.attach(pb?.player) }
 
             DayScrubber(dayStart: dayStart, ranges: ranges, markers: markers, playhead: scrub.playhead) { date in
                 scrub.load(at: date, play: true)

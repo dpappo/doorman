@@ -391,7 +391,7 @@ struct PlayerView: NSViewRepresentable {
     func makeNSView(context: Context) -> AVPlayerView {
         let v = AVPlayerView()
         v.player = player
-        v.controlsStyle = .floating
+        v.controlsStyle = .none          // our own controls sit below the picture
         v.videoGravity = .resizeAspect
         v.showsFullScreenToggleButton = true
         v.allowsPictureInPicturePlayback = true
@@ -399,5 +399,122 @@ struct PlayerView: NSViewRepresentable {
     }
     func updateNSView(_ v: AVPlayerView, context: Context) {
         if v.player !== player { v.player = player }
+    }
+}
+
+// Keeps playback state in step with an AVPlayer for the controls below the video.
+@MainActor
+final class PlayerModel: ObservableObject {
+    @Published var time: Double = 0
+    @Published var duration: Double = 0
+    @Published var playing = false
+    @Published var muted = false
+    @Published var scrubbing = false
+    private(set) var player: AVPlayer?
+    private var timeToken: Any?
+    private var statusObserver: NSKeyValueObservation?
+
+    func attach(_ p: AVPlayer?) {
+        guard p !== player else { return }
+        detach()
+        player = p
+        guard let p else { return }
+        muted = p.isMuted
+        timeToken = p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main) { [weak self] t in
+            MainActor.assumeIsolated {
+                guard let self, !self.scrubbing else { return }
+                self.time = t.seconds.isFinite ? t.seconds : 0
+                let d = p.currentItem?.duration.seconds ?? 0
+                self.duration = d.isFinite ? d : 0
+            }
+        }
+        statusObserver = p.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] p, _ in
+            let on = p.timeControlStatus != .paused
+            DispatchQueue.main.async { self?.playing = on }
+        }
+    }
+
+    func detach() {
+        if let t = timeToken { player?.removeTimeObserver(t) }
+        timeToken = nil
+        statusObserver = nil
+        player = nil
+        time = 0; duration = 0; playing = false
+    }
+
+    func togglePlay() {
+        guard let p = player else { return }
+        if p.timeControlStatus == .paused {
+            if duration > 0 && time >= duration - 0.3 { seek(to: 0) }
+            p.play()
+        } else { p.pause() }
+    }
+
+    func seek(to t: Double) {
+        time = t
+        player?.seek(to: CMTime(seconds: max(0, t), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func skip(_ by: Double) { seek(to: min(max(0, time + by), max(duration - 0.1, 0))) }
+
+    func toggleMute() {
+        guard let p = player else { return }
+        p.isMuted.toggle()
+        muted = p.isMuted
+    }
+}
+
+// Play/pause, skip, a scrubber and sound — under the video, never over it.
+struct PlayerControls: View {
+    @ObservedObject var model: PlayerModel
+    // Turns a position in the clip into the time of day it was filmed.
+    var clock: ((Double) -> Date?)? = nil
+
+    private static let clockFormat: DateFormatter = { let f = DateFormatter(); f.dateFormat = "h:mm:ss a"; return f }()
+
+    private func mmss(_ s: Double) -> String {
+        let t = Int(max(0, s).rounded())
+        return String(format: "%d:%02d", t / 60, t % 60)
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button { model.skip(-10) } label: { Image(systemName: "gobackward.10") }
+                .help("Back 10 seconds")
+            Button { model.togglePlay() } label: {
+                Image(systemName: model.playing ? "pause.fill" : "play.fill").font(.system(size: 17)).frame(width: 20)
+            }
+            .help(model.playing ? "Pause" : "Play")
+            Button { model.skip(10) } label: { Image(systemName: "goforward.10") }
+                .help("Forward 10 seconds")
+
+            Text(clock?(model.time).map { Self.clockFormat.string(from: $0) } ?? mmss(model.time))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: clock == nil ? 34 : 74, alignment: .leading)
+
+            Slider(value: Binding(get: { min(model.time, max(model.duration, 0.01)) },
+                                  set: { model.seek(to: $0) }),
+                   in: 0...max(model.duration, 0.01)) { editing in
+                model.scrubbing = editing
+            }
+            .controlSize(.small)
+
+            Text("-" + mmss(model.duration - model.time))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 38, alignment: .trailing)
+
+            Button { model.toggleMute() } label: {
+                Image(systemName: model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill").frame(width: 18)
+            }
+            .help(model.muted ? "Sound on" : "Mute")
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: 14, weight: .medium))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.primary.opacity(0.05)))
+        .disabled(model.player == nil)
     }
 }

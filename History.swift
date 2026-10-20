@@ -344,13 +344,21 @@ final class HistoryStore: ObservableObject {
         var player: AVPlayer?
         if #available(macOS 15, *) {
             let comp = AVMutableComposition()
+            var coveredUntil: Date?
             for s in segs {
                 let asset = AVURLAsset(url: s.url)
                 guard let dur = try? await asset.load(.duration), dur.seconds > 0 else { continue }
+                // Files overlap by about a second; skip what the previous one already showed.
+                var skip = 0.0
+                if let until = coveredUntil, until > s.start { skip = until.timeIntervalSince(s.start) }
+                guard skip < dur.seconds - 0.2 else { continue }
                 let at = comp.duration
+                let range = CMTimeRange(start: CMTime(seconds: skip, preferredTimescale: 600),
+                                        duration: CMTime(seconds: dur.seconds - skip, preferredTimescale: 600))
                 do {
-                    try await comp.insertTimeRange(CMTimeRange(start: .zero, duration: dur), of: asset, at: at)
-                    pieces.append(.init(start: s.start, offset: at.seconds, duration: dur.seconds))
+                    try await comp.insertTimeRange(range, of: asset, at: at)
+                    pieces.append(.init(start: s.start.addingTimeInterval(skip), offset: at.seconds, duration: dur.seconds - skip))
+                    coveredUntil = s.start.addingTimeInterval(dur.seconds)
                 } catch { continue }
             }
             if comp.duration.seconds > 0 { player = AVPlayer(playerItem: AVPlayerItem(asset: comp)) }

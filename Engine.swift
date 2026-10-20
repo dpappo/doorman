@@ -84,9 +84,11 @@ video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;backgro
     // video after about 20 seconds (the picture froze while the sound carried on).
     r.start(1000);
     post({ kind: 'debug', text: 'recorder started state=' + r.state + ' mime=' + r.mimeType });
+    // The next file starts a second before this one ends, so no moment falls between
+    // two files; playback trims the overlap.
+    setTimeout(nextSegment, SEG_MS - 1000);
     setTimeout(function () {
       try { if (r.state !== 'inactive') r.stop(); } catch (e) {}
-      nextSegment();
     }, SEG_MS);
   }
 
