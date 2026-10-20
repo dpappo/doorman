@@ -45,7 +45,7 @@ When someone rings, a picture-in-picture window appears above everything else. I
 <td width="33%" valign="top">
 
 ### ⏺️ 24/7 recording
-Every minute is saved to your Mac, up to a storage limit you choose (10 GB is about three days). The oldest footage is replaced first. Scrub through any hour on a timeline.
+Every minute is saved to your Mac, up to a storage limit you choose (about 8 GB a day, so 10 GB holds roughly a day). The oldest footage is replaced first. Scrub through any hour on a timeline.
 
 </td>
 </tr>
@@ -211,7 +211,7 @@ Google's API only lets apps <i>receive</i> audio from a doorbell. To talk back, 
 <details>
 <summary><b>How much disk space does recording use?</b></summary>
 <br>
-About 3 GB a day. Choose a limit from 5 GB to 250 GB in <b>Settings → Recording</b>, or turn 24/7 recording off.
+About 8 GB a day at full quality. Choose a limit from 5 GB to 250 GB in <b>Settings → Recording</b>, or turn 24/7 recording off.
 </details>
 
 <details>

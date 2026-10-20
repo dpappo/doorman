@@ -80,7 +80,9 @@ video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;backgro
       fr.readAsDataURL(blob);
     };
     r.onerror = function (e) { post({ kind: 'recordError', error: String((e && e.error) || e) }); };
-    r.start();
+    // Hand over data every second. Without a timeslice, WebKit's recorder stops taking
+    // video after about 20 seconds (the picture froze while the sound carried on).
+    r.start(1000);
     post({ kind: 'debug', text: 'recorder started state=' + r.state + ' mime=' + r.mimeType });
     setTimeout(function () {
       try { if (r.state !== 'inactive') r.stop(); } catch (e) {}

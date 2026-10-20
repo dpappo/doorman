@@ -278,6 +278,14 @@ enum SoundDetector {
     ]
     static let alarming: Set<String> = ["Glass breaking", "Smoke alarm", "Screaming", "Gunshot"]
 
+    // How sure the classifier must be, and how many separate moments it must hear the
+    // sound, before we believe it. Street noise easily fools it at lower settings.
+    static func rule(for name: String) -> (confidence: Double, hits: Int) {
+        if alarming.contains(name) { return (0.85, 3) }
+        if name == "Knocking" || name == "Dog barking" || name == "Doorbell chime" { return (0.75, 2) }
+        return (0.6, 1)
+    }
+
     // Returns (friendly label, seconds into the file) for notable sounds.
     static func analyze(_ url: URL) -> [(String, Double)] {
         guard let analyzer = try? SNAudioFileAnalyzer(url: url),
@@ -285,9 +293,14 @@ enum SoundDetector {
         let collector = SoundCollector()
         guard (try? analyzer.add(request, withObserver: collector)) != nil else { return [] }
         analyzer.analyze()
-        var out: [(String, Double)] = []
+        var byName: [String: [(at: Double, confidence: Double)]] = [:]
         for h in collector.hits {
-            if let name = names[h.label] { out.append((name, h.at)) }
+            guard let name = names[h.label], h.confidence >= rule(for: name).confidence else { continue }
+            byName[name, default: []].append((h.at, h.confidence))
+        }
+        var out: [(String, Double)] = []
+        for (name, hits) in byName where hits.count >= rule(for: name).hits {
+            out.append((name, hits.map(\.at).min() ?? 0))
         }
         return out
     }
@@ -297,7 +310,7 @@ enum SoundDetector {
 
 @Generable
 struct VisitWriteUp {
-    @Guide(description: "A notification title of at most 7 words, e.g. 'Julia is at the door' or 'Package delivered by UPS'")
+    @Guide(description: "A notification title of at most 7 words, e.g. 'Someone is at the door' or 'Package delivered by UPS'. Use a person's name only if it is listed under Recognized people.")
     var headline: String
     @Guide(description: "One or two short, plain sentences describing the visit, using only the facts given")
     var description: String
@@ -361,6 +374,7 @@ enum HomeAI {
         let session = LanguageModelSession(instructions: """
         You write short, friendly alerts about what a home's front-door camera saw. \
         Use only the facts given. Never invent names, objects, actions, dates or years. \
+        Only use a person's name if it appears under "Recognized people"; otherwise say "someone" or "a person". \
         Don't state the date; the time is optional. If nobody is visible, say the porch looked clear. \
         If a named person is listed, use their name. Mention a package or courier only if the facts include one.
         """)
@@ -655,7 +669,7 @@ final class Intelligence: ObservableObject {
                         if !vv.sounds.contains(label) { vv.sounds.append(label) }
                         if !vv.tags.contains(label) { vv.tags.append(label) }
                     }
-                } else if SoundDetector.alarming.contains(label) || label == "Knocking" || label == "Dog barking" {
+                } else if SoundDetector.alarming.contains(label) || label == "Knocking" {
                     // …or record it as its own event.
                     let r = history.recordEvent(kind: "Sound", at: when, analyze: false)
                     visitId = r.visit.id

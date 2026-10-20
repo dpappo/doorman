@@ -189,7 +189,7 @@ struct RecordingPane: View {
                     Button("Open History…") { model.openHistory() }
                 }
             } footer: {
-                Text("About 3 GB of footage a day. When the limit is reached, the oldest 24/7 footage is overwritten first; event clips are kept for the history period while space allows.")
+                Text("About 8 GB of footage a day. When the limit is reached, the oldest 24/7 footage is overwritten first; event clips are kept for the history period while space allows.")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
