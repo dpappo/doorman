@@ -294,6 +294,20 @@ final class ControlBar: NSView {
 }
 
 // The window's content: reports when the pointer enters or leaves the window.
+// Top-down layout for the menu header.
+final class MenuHeaderView: NSView {
+    override var isFlipped: Bool { true }
+}
+
+// A transparent layer that turns a click anywhere on it into one action.
+final class ClickCatcher: NSView {
+    var onClick: (() -> Void)?
+    override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) { onClick?() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 final class HoverView: NSView {
     var onHover: ((Bool) -> Void)?
     override func updateTrackingAreas() {
@@ -2137,20 +2151,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         NSImage(systemSymbolName: name, accessibilityDescription: nil)
     }
 
+    // The box at the top of the menu that the live picture is shown in, while the menu is open.
+    var menuVideoBox: NSView?
+
+    func makeMenuHeader(status: (String, Color), lastLine: String?) -> NSView {
+        let width = MenuLive.width, inset = MenuLive.inset
+        let videoWidth = width - inset * 2
+        var aspect: CGFloat = 4.0 / 3.0
+        if let s = engine?.videoSize, s.width > 0, s.height > 0 { aspect = s.width / s.height }
+        let videoHeight = min(max(videoWidth / aspect, 150), 320).rounded()
+
+        let text = NSHostingView(rootView: MenuHeader(title: menuHeadline, detail: status.0,
+                                                      statusColor: status.1, lastLine: lastLine))
+        let textSize = text.fittingSize
+        let root = MenuHeaderView(frame: NSRect(x: 0, y: 0, width: width, height: inset + videoHeight + textSize.height))
+        text.frame = NSRect(x: 0, y: inset + videoHeight, width: width, height: textSize.height)
+        root.addSubview(text)
+
+        let box = NSView(frame: NSRect(x: inset, y: inset, width: videoWidth, height: videoHeight))
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 10
+        box.layer?.cornerCurve = .continuous
+        box.layer?.masksToBounds = true
+        box.layer?.backgroundColor = NSColor.black.cgColor
+        root.addSubview(box)
+
+        let showingElsewhere = liveUsesEngine || window?.isVisible == true
+        let live = engine?.isReady == true && !showingElsewhere
+        if live {
+            engine.attach(to: box, below: nil, fill: true)
+            menuVideoBox = box
+        } else {
+            let (symbol, message): (String, String) =
+                showingElsewhere ? ("pip", "Your door is showing in the Live View window") :
+                engine?.running == true ? ("video", "Connecting to your doorbell…") :
+                ("video.slash", "The live picture isn't available right now")
+            let placeholder = NSHostingView(rootView: MenuLivePlaceholder(symbol: symbol, message: message))
+            placeholder.frame = box.bounds
+            placeholder.autoresizingMask = [.width, .height]
+            box.addSubview(placeholder)
+        }
+        let overlay = NSHostingView(rootView: MenuLiveOverlay(live: live))
+        overlay.frame = box.bounds
+        overlay.autoresizingMask = [.width, .height]
+        box.addSubview(overlay)
+
+        // Clicking the picture opens the full live view.
+        let click = ClickCatcher(frame: box.bounds)
+        click.autoresizingMask = [.width, .height]
+        click.onClick = { [weak self] in
+            guard let self else { return }
+            self.statusMenu.cancelTracking()
+            DispatchQueue.main.async {
+                if self.window.isVisible { self.window.orderFrontRegardless() }
+                else { self.toggleLive(nil) }
+            }
+        }
+        box.addSubview(click)
+        return root
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        guard menu === statusMenu, let box = menuVideoBox else { return }
+        menuVideoBox = nil
+        // Only take the picture back if the live view window hasn't claimed it.
+        if engine.webView.superview === box { engine.detach() }
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === statusMenu else { return }
         menu.removeAllItems()
 
-        // Header: what the app is doing, and the last thing it saw.
+        // Header: the live picture, what the app is doing, and the last thing it saw.
         let latest = history?.visits.first
         let status = menuStatusLine
         let header = NSMenuItem()
-        let hv = NSHostingView(rootView: MenuHeader(
-            title: menuHeadline, detail: status.0, statusColor: status.1,
-            thumb: latest.flatMap { history.thumbnailURL($0) },
-            lastLine: latest.map { "\($0.title) · \(timeString($0.time))" }))
-        hv.frame = NSRect(origin: .zero, size: hv.fittingSize)
-        header.view = hv
+        header.view = makeMenuHeader(status: status,
+                                     lastLine: latest.map { "\($0.title) · \(timeString($0.time))" })
         menu.addItem(header)
         menu.addItem(.separator())
 

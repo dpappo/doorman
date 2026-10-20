@@ -350,36 +350,71 @@ struct MenuHeader: View {
     let title: String
     let detail: String
     let statusColor: Color
-    let thumb: URL?
     let lastLine: String?
     var body: some View {
-        HStack(spacing: 12) {
-            if let thumb {
-                Thumb(url: thumb, width: 52, radius: 10)
-            } else {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill(LinearGradient(colors: [Color(nsColor: .systemOrange), Color(nsColor: .systemRed)],
-                                             startPoint: .top, endPoint: .bottom))
-                    Image(systemName: "bell.fill").font(.system(size: 22, weight: .semibold)).foregroundStyle(.white)
-                }
-                .frame(width: 52, height: 52)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 5) {
+                Circle().fill(statusColor).frame(width: 7, height: 7)
+                Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 13, weight: .semibold))
-                HStack(spacing: 5) {
-                    Circle().fill(statusColor).frame(width: 7, height: 7)
-                    Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-                if let lastLine {
-                    Text(lastLine).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                }
+            if let lastLine {
+                Text(lastLine).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .frame(width: 300, alignment: .leading)
+        .padding(.top, 8)
+        .padding(.bottom, 7)
+        .frame(width: MenuLive.width, alignment: .leading)
+    }
+}
+
+enum MenuLive {
+    static let width: CGFloat = 300
+    static let inset: CGFloat = 6
+}
+
+// Drawn over the live picture at the top of the menu.
+struct MenuLiveOverlay: View {
+    let live: Bool
+    var body: some View {
+        VStack {
+            HStack {
+                if live {
+                    HStack(spacing: 4) {
+                        Circle().fill(Color.red).frame(width: 6, height: 6)
+                        Text("LIVE").font(.system(size: 10, weight: .bold)).tracking(0.4)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(.black.opacity(0.45), in: Capsule())
+                }
+                Spacer()
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 22, height: 22)
+                    .background(.black.opacity(0.45), in: Circle())
+            }
+            Spacer()
+        }
+        .padding(8)
+    }
+}
+
+// Shown in place of the picture when there's nothing live to show.
+struct MenuLivePlaceholder: View {
+    let symbol: String
+    let message: String
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: symbol).font(.system(size: 24, weight: .regular))
+            Text(message).font(.system(size: 11, weight: .medium)).multilineTextAlignment(.center)
+        }
+        .foregroundStyle(.white.opacity(0.7))
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(LinearGradient(colors: [Color(white: 0.16), Color(white: 0.08)], startPoint: .top, endPoint: .bottom))
     }
 }
 

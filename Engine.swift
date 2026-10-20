@@ -305,14 +305,16 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
 
     // MARK: Live view
 
-    func attach(to container: NSView, below sibling: NSView?) {
+    func attach(to container: NSView, below sibling: NSView?, fill: Bool = false) {
         webView.removeFromSuperview()
         webView.frame = container.bounds
         webView.autoresizingMask = [.width, .height]
         if let sibling { container.addSubview(webView, positioned: .below, relativeTo: sibling) }
         else { container.addSubview(webView) }
         attached = true
-        webView.evaluateJavaScript("window.setDisplay && window.setDisplay(true)", completionHandler: nil)
+        webView.evaluateJavaScript("window.setDisplay && window.setDisplay(true);" +
+            "(function(){var v=document.getElementById('v'); if (v) v.style.objectFit='\(fill ? "cover" : "contain")';})()",
+            completionHandler: nil)
         // Moving a playing video between windows can leave it blank until it redraws; nudge it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, self.attached, let sv = self.webView.superview else { return }
