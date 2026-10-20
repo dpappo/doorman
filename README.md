@@ -75,7 +75,7 @@ Name someone once, and alerts, descriptions and search use their name from then 
   <img src="docs/ask.jpg" alt="Ask about your home, powered by Apple Intelligence" width="88%">
 </p>
 
-It also listens for **sounds** like knocking, barking, breaking glass and smoke alarms, and notices **packages left at the door**. It lives in your **menu bar**, with no Dock icon.
+It also listens for **sounds** like knocking, barking, breaking glass and smoke alarms, and notices **packages left at the door**. It lives in your **menu bar**, with no Dock icon. Press **⌃⌥⌘D** from any app to see your door, or **⌃⌥⌘H** for history. You can change both in Settings.
 
 <p align="center">
   <img src="docs/settings.jpg" alt="Settings: Alerts, Recording and Nest" width="100%">
@@ -264,6 +264,7 @@ flowchart LR
 | [`History.swift`](History.swift) | Recordings, visits, storage limit, playback |
 | [`Intelligence.swift`](Intelligence.swift) | Vision, faces, sounds, and the Apple Intelligence prompts and tools |
 | [`HistoryUI.swift`](HistoryUI.swift) · [`SettingsUI.swift`](SettingsUI.swift) · [`Style.swift`](Style.swift) | The SwiftUI windows and shared design |
+| [`Shortcuts.swift`](Shortcuts.swift) | Keyboard shortcuts that work from any app |
 | [`build.sh`](build.sh) | Compiles with `swiftc` (no Xcode project needed) and installs the app |
 
 The project has no dependencies, no package manager and no Xcode project, just Apple's frameworks.

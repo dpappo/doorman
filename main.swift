@@ -944,6 +944,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                                                          reason: "Watching the doorbell for visitors")
         buildViewer()
         buildWatcher()
+        HotKeys.shared.perform = { [weak self] action in
+            switch action {
+            case .liveView: self?.toggleLive(nil)
+            case .history: self?.openHistory(nil)
+            }
+        }
+        HotKeys.shared.changed = { [weak self] in self?.applyShortcutsToMenus() }
+        HotKeys.shared.load()
         buildMainMenu()
         buildStatusItem()
         setUpLoginItemOnce()
@@ -2268,11 +2276,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         let live = item(window.isVisible ? "Hide Live View" : "Show Live View", #selector(toggleLive(_:)))
         live.image = menuSymbol(window.isVisible ? "video.slash" : "video")
-        live.keyEquivalent = "l"
+        applyShortcut(.liveView, to: live)
         menu.addItem(live)
         let hist = item("History…", #selector(openHistory(_:)))
         hist.image = menuSymbol("clock.arrow.circlepath")
-        hist.keyEquivalent = "y"
+        applyShortcut(.history, to: hist)
         menu.addItem(hist)
         menu.addItem(.separator())
 
@@ -2516,8 +2524,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         decisionHandler(origin.host.hasSuffix("google.com") ? .grant : .prompt)
     }
 
-    // MARK: Keyboard shortcuts (work while the live view is in front)
+    // MARK: Keyboard shortcuts
 
+    var appLiveItem: NSMenuItem?
+    var appHistoryItem: NSMenuItem?
+
+    // Shows the everywhere-shortcuts (set in Settings) next to their menu items.
+    func applyShortcut(_ action: ShortcutAction, to item: NSMenuItem) {
+        if let s = HotKeys.shared.shortcut(action), let key = s.menuKeyEquivalent {
+            item.keyEquivalent = key
+            item.keyEquivalentModifierMask = s.flags
+        } else {
+            item.keyEquivalent = ""
+            item.keyEquivalentModifierMask = []
+        }
+    }
+
+    func applyShortcutsToMenus() {
+        if let appLiveItem { applyShortcut(.liveView, to: appLiveItem) }
+        if let appHistoryItem { applyShortcut(.history, to: appHistoryItem) }
+    }
+
+    // The app's own menus. Show/History use the everywhere-shortcuts; the View menu's
+    // shortcuts only work while the live view window is in front.
     func buildMainMenu() {
         let main = NSMenu()
 
@@ -2527,8 +2556,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Show or Hide Live View", action: #selector(toggleLive(_:)), keyEquivalent: "l").target = self
-        appMenu.addItem(withTitle: "History…", action: #selector(openHistory(_:)), keyEquivalent: "y").target = self
+        appLiveItem = appMenu.addItem(withTitle: "Show or Hide Live View", action: #selector(toggleLive(_:)), keyEquivalent: "")
+        appLiveItem?.target = self
+        appHistoryItem = appMenu.addItem(withTitle: "History…", action: #selector(openHistory(_:)), keyEquivalent: "")
+        appHistoryItem?.target = self
+        applyShortcutsToMenus()
         let troubleItem = NSMenuItem(title: "Troubleshooting", action: nil, keyEquivalent: "")
         let troubleMenu = NSMenu(title: "Troubleshooting")
         troubleMenu.addItem(withTitle: "Test Pop-Up", action: #selector(testPopUp(_:)), keyEquivalent: "").target = self

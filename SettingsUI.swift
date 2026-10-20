@@ -63,12 +63,27 @@ struct GeneralPane: View {
                 }
             }
             Section {
+                ForEach(ShortcutAction.allCases) { action in
+                    LabeledContent { ShortcutRecorder(action: action) } label: { Text(action.title) }
+                }
+            } header: {
+                Text("Keyboard Shortcuts")
+            } footer: {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("These work from any app. Click one to change it.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Restore Defaults") { HotKeys.shared.restoreDefaults() }
+                        .controlSize(.small)
+                }
+            }
+            Section {
                 Toggle("Open Doorman at login", isOn: Binding(get: { model.loginEnabled }, set: { model.setLogin($0) }))
             }
         }
         .formStyle(.grouped)
         .scrollDisabled(true)
-        .frame(width: 560, height: 274)
+        .frame(width: 560, height: 474)
     }
 }
 

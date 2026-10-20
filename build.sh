@@ -14,7 +14,7 @@ APP="Doorman.app"
 echo "Building..."
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-xcrun swiftc -swift-version 5 -O main.swift Engine.swift History.swift Intelligence.swift HistoryUI.swift SettingsUI.swift Style.swift -o "$APP/Contents/MacOS/Doorman" -framework Cocoa -framework WebKit
+xcrun swiftc -swift-version 5 -O main.swift Engine.swift History.swift Intelligence.swift HistoryUI.swift SettingsUI.swift Style.swift Shortcuts.swift -o "$APP/Contents/MacOS/Doorman" -framework Cocoa -framework WebKit
 cp Info.plist "$APP/Contents/Info.plist"
 if [ -f nest-config.json ]; then
   cp nest-config.json "$APP/Contents/Resources/nest-config.json"
