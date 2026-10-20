@@ -127,6 +127,42 @@ video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;backgro
   };
   window.closeStream = function () { window.stopRecording(); try { pc.close(); } catch (e) {} };
 
+  // Watchdog. Google sometimes keeps the connection (and the sound) going but stops
+  // sending the picture. Check every 5 seconds; if the picture hasn't moved for 15,
+  // tell the app so it can reconnect.
+  var last = null, stillSince = 0, tick = 0;
+  setInterval(function () {
+    if (!started || pc.connectionState === 'closed') return;
+    pc.getStats().then(function (rep) {
+      var vb = 0, vr = 0, vd = 0, ab = 0, lost = 0, fps = 0, pli = 0;
+      rep.forEach(function (s) {
+        if (s.type !== 'inbound-rtp') return;
+        var kind = s.kind || s.mediaType;
+        if (kind === 'video') {
+          vb = s.bytesReceived || 0; vr = s.framesReceived || 0; vd = s.framesDecoded || 0;
+          lost = s.packetsLost || 0; fps = s.framesPerSecond || 0; pli = s.pliCount || 0;
+        } else if (kind === 'audio') { ab = s.bytesReceived || 0; }
+      });
+      var now = Date.now();
+      if (last) {
+        var dt = Math.max(1, (now - last.t) / 1000);
+        var moving = (vb - last.vb) > 8000 &&                 // picture data is arriving
+                     (!vr || vr > last.vr) &&                 // and forming frames
+                     (!shown || !vd || vd > last.vd);         // and, on screen, being shown
+        if (moving) stillSince = 0; else if (!stillSince) stillSince = last.t;
+        var stalled = stillSince && now - stillSince >= 15000;
+        tick++;
+        if (tick % 12 === 0 || stalled) {
+          post({ kind: 'stats', text: 'video ' + Math.round((vb - last.vb) * 8 / 1000 / dt) + 'kbps fps=' +
+            Math.round(fps) + ' frames=' + vr + '/' + vd + ' lost=' + lost + ' pli=' + pli +
+            ' audio ' + Math.round((ab - last.ab) * 8 / 1000 / dt) + 'kbps' + (shown ? ' shown' : '') });
+        }
+        if (stalled) { stillSince = 0; post({ kind: 'stalled', text: 'no picture for 15s' }); }
+      }
+      last = { t: now, vb: vb, vr: vr, vd: vd, ab: ab };
+    }).catch(function () {});
+  }, 5000);
+
   pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).then(function () {
     var sent = false;
     function send() { if (!sent) { sent = true; post({ kind: 'offer', sdp: pc.localDescription.sdp }); } }
@@ -386,6 +422,9 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
             onStateChange?()
         case "failed":
             restartSoon((body["error"] as? String) ?? "Connection failed")
+        case "stalled":
+            // Sound without a picture: reconnecting gets Google to send a fresh picture.
+            restartSoon("Picture stopped")
         case "size":
             if let w = (body["w"] as? NSNumber)?.doubleValue, let h = (body["h"] as? NSNumber)?.doubleValue {
                 videoSize = CGSize(width: w, height: h)
