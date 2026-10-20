@@ -153,7 +153,7 @@ video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;backgro
         var stalled = stillSince && now - stillSince >= 15000;
         tick++;
         if (tick % 12 === 0 || stalled) {
-          post({ kind: 'stats', text: 'video ' + Math.round((vb - last.vb) * 8 / 1000 / dt) + 'kbps fps=' +
+          post({ kind: 'stats', ok: !stillSince, text: 'video ' + Math.round((vb - last.vb) * 8 / 1000 / dt) + 'kbps fps=' +
             Math.round(fps) + ' frames=' + vr + '/' + vd + ' lost=' + lost + ' pli=' + pli +
             ' audio ' + Math.round((ab - last.ab) * 8 / 1000 / dt) + 'kbps' + (shown ? ' shown' : '') });
         }
@@ -206,6 +206,7 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
     private var lastSegmentAt: Date?
     private var restartAt: Date?
     private var failures = 0
+    private var stalls = 0          // picture stopped this many times in a row
 
     var onAspect: ((Double, Double) -> Void)?
     private(set) var videoSize: CGSize?
@@ -292,14 +293,14 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
         onStateChange?()
     }
 
-    private func restartSoon(_ reason: String) {
+    private func restartSoon(_ reason: String, delay fixed: Double? = nil) {
         guard running else { return }
         DebugLog.write("engine restart: \(reason)")
         lastError = reason
         streaming = false
         stopSession()
         failures += 1
-        let delay = min(5.0 * pow(2.0, Double(min(failures, 5))), 120)
+        let delay = fixed ?? min(5.0 * pow(2.0, Double(min(failures, 5))), 120)
         restartAt = Date().addingTimeInterval(delay)
         onStateChange?()
     }
@@ -424,7 +425,12 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
             restartSoon((body["error"] as? String) ?? "Connection failed")
         case "stalled":
             // Sound without a picture: reconnecting gets Google to send a fresh picture.
-            restartSoon("Picture stopped")
+            // If it keeps happening (say the camera was switched off in Google Home),
+            // wait longer each time, up to 10 minutes, rather than asking Google over and over.
+            stalls += 1
+            restartSoon("Picture stopped", delay: min(10 * pow(2, Double(stalls - 1)), 600))
+        case "stats":
+            if (body["ok"] as? Bool) == true { stalls = 0 }
         case "size":
             if let w = (body["w"] as? NSNumber)?.doubleValue, let h = (body["h"] as? NSNumber)?.doubleValue {
                 videoSize = CGSize(width: w, height: h)
