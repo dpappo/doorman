@@ -146,9 +146,10 @@ video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;backgro
       var now = Date.now();
       if (last) {
         var dt = Math.max(1, (now - last.t) / 1000);
-        var moving = (vb - last.vb) > 8000 &&                 // picture data is arriving
-                     (!vr || vr > last.vr) &&                 // and forming frames
-                     (!shown || !vd || vd > last.vd);         // and, on screen, being shown
+        // New picture frames arriving (or, if WebKit doesn't count frames, picture data),
+        // and, while it's on screen, being shown.
+        var moving = (vr ? vr > last.vr : (vb - last.vb) > 8000) &&
+                     (!shown || !vd || vd > last.vd);
         if (moving) stillSince = 0; else if (!stillSince) stillSince = last.t;
         var stalled = stillSince && now - stillSince >= 15000;
         tick++;
