@@ -177,7 +177,7 @@ struct EventsView: View {
     let day: String?            // nil = search results
 
     var body: some View {
-        HSplitView {
+        SplitPanes(autosave: "historyDetailShare", trailingShare: 0.4, minLeading: 380, minTrailing: 360) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     if let day {
@@ -211,8 +211,8 @@ struct EventsView: View {
                 .padding(.vertical, 20)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(minWidth: 380, idealWidth: 560, maxWidth: .infinity)
-
+            .frame(minWidth: 380, maxWidth: .infinity)
+        } trailing: {
             Group {
                 if let id = model.selectedVisit, let v = history.visit(id) {
                     VisitDetail(visit: v, history: history, faces: faces) { delete(v.id) }
@@ -222,7 +222,7 @@ struct EventsView: View {
                                message: "Choose an event to watch what happened.")
                 }
             }
-            .frame(minWidth: 360, idealWidth: 420, maxWidth: .infinity)
+            .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.primary.opacity(0.015))
         }
     }
@@ -508,6 +508,7 @@ struct VisitDetail: View {
                 player = pb?.player
                 controls.attach(pb?.player)
                 loading = false
+                pb?.player.play()          // start as soon as the event is chosen
             }
         }
     }

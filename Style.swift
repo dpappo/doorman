@@ -418,6 +418,77 @@ struct MenuLivePlaceholder: View {
     }
 }
 
+// MARK: - Split view
+
+// A standard Mac split view with two panes. The trailing pane starts at `trailingShare`
+// of the width, and remembers where you drag the divider.
+final class PaneSplitView: NSSplitView, NSSplitViewDelegate {
+    var placed = false
+    var key = ""
+    var defaultShare: CGFloat = 0.4
+    var minLeading: CGFloat = 300
+    var minTrailing: CGFloat = 300
+
+    private var share: CGFloat {
+        let saved = UserDefaults.standard.double(forKey: key)
+        return saved > 0.15 && saved < 0.85 ? CGFloat(saved) : defaultShare
+    }
+
+    override func layout() {
+        super.layout()
+        guard !placed, bounds.width > 100, arrangedSubviews.count == 2 else { return }
+        placed = true
+        setPosition((bounds.width * (1 - share)).rounded(), ofDividerAt: 0)
+    }
+
+    func splitView(_ s: NSSplitView, constrainMinCoordinate p: CGFloat, ofSubviewAt i: Int) -> CGFloat {
+        max(p, minLeading)
+    }
+    func splitView(_ s: NSSplitView, constrainMaxCoordinate p: CGFloat, ofSubviewAt i: Int) -> CGFloat {
+        min(p, s.bounds.width - minTrailing - s.dividerThickness)
+    }
+    // Remember the divider only when you drag it, not when the window resizes.
+    func splitViewDidResizeSubviews(_ n: Notification) {
+        guard placed, bounds.width > 100, NSApp.currentEvent?.type == .leftMouseDragged,
+              let right = arrangedSubviews.last else { return }
+        UserDefaults.standard.set(Double(right.frame.width / bounds.width), forKey: key)
+    }
+}
+
+struct SplitPanes<Leading: View, Trailing: View>: NSViewRepresentable {
+    let autosave: String
+    let trailingShare: CGFloat
+    let minLeading: CGFloat
+    let minTrailing: CGFloat
+    @ViewBuilder var leading: Leading
+    @ViewBuilder var trailing: Trailing
+
+    func makeNSView(context: Context) -> PaneSplitView {
+        let split = PaneSplitView()
+        split.isVertical = true
+        split.dividerStyle = .thin
+        split.delegate = split
+        split.key = autosave
+        split.defaultShare = trailingShare
+        split.minLeading = minLeading
+        split.minTrailing = minTrailing
+        for view in [AnyView(leading), AnyView(trailing)] {
+            let host = NSHostingView(rootView: view)
+            host.sizingOptions = []            // the split view decides the sizes
+            split.addArrangedSubview(host)
+        }
+        // Both panes grow and shrink together when the window is resized.
+        split.setHoldingPriority(.defaultLow, forSubviewAt: 0)
+        split.setHoldingPriority(.defaultLow, forSubviewAt: 1)
+        return split
+    }
+
+    func updateNSView(_ split: PaneSplitView, context: Context) {
+        (split.arrangedSubviews.first as? NSHostingView<AnyView>)?.rootView = AnyView(leading)
+        (split.arrangedSubviews.last as? NSHostingView<AnyView>)?.rootView = AnyView(trailing)
+    }
+}
+
 // MARK: - Video
 
 // AppKit's player view, with the standard floating controls.
