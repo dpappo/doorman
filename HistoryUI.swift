@@ -216,6 +216,7 @@ struct EventsView: View {
             Group {
                 if let id = model.selectedVisit, let v = history.visit(id) {
                     VisitDetail(visit: v, history: history, faces: faces) { delete(v.id) }
+                        .id(v.id)      // a fresh player for every event, so the last one's video can't linger
                 } else {
                     EmptyState(symbol: "play.rectangle", title: "No Event Selected",
                                message: "Choose an event to watch what happened.")
@@ -497,8 +498,12 @@ struct VisitDetail: View {
         waitingForSave = false
         loading = true
         Task {
-            let pb = await history.playback(from: v.time, to: v.endTime.addingTimeInterval(30), lead: 5)
-            if loadedFor == key {
+            var pb = await history.playback(from: v.time, to: v.endTime.addingTimeInterval(30), lead: 5)
+            if let p = pb, !p.pieces.contains(where: { $0.start <= v.time && v.time < $0.start.addingTimeInterval($0.duration) + 2 }) {
+                p.player.pause()
+                pb = nil
+            }
+            if loadedFor == key && visit.id == v.id {
                 playback = pb
                 player = pb?.player
                 controls.attach(pb?.player)
