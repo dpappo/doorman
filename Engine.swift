@@ -412,7 +412,10 @@ final class CameraEngine: NSObject, WKScriptMessageHandler {
                     let js = String(data: try JSONEncoder().encode(r.answer), encoding: .utf8) ?? "\"\""
                     self.webView.evaluateJavaScript("setAnswer(\(js))", completionHandler: nil)
                 } catch {
-                    self.restartSoon("Google didn't start the stream")
+                    var detail = "\(error)"
+                    if case NestError.other(let m) = error { detail = m }
+                    if case NestError.notLinked = error { detail = "Nest isn't connected" }
+                    self.restartSoon("Google didn't start the stream: " + detail)
                 }
             }
         case "playing":

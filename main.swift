@@ -432,7 +432,12 @@ final class NestLink {
     var state: State = .notLinked { didSet { if state != oldValue { onChange?() } } }
     var lastCheck: Date?
     var deviceNames: [String] = []
-    var cameraDevice: String?          // e.g. enterprises/…/devices/… (supports WebRTC live view)
+    // e.g. enterprises/…/devices/… (supports WebRTC live view). Remembered, so a Google hiccup
+    // in listing devices doesn't stop the live view or recording.
+    var cameraDevice: String? = UserDefaults.standard.string(forKey: "cameraDevice") {
+        didSet { if let cameraDevice { UserDefaults.standard.set(cameraDevice, forKey: "cameraDevice") } }
+    }
+    private var nextDeviceList = Date.distantPast
     var onChange: (() -> Void)?
     var onEvent: ((String, Date) -> Void)?       // kind, when it happened (Google's timestamp)
 
@@ -635,8 +640,10 @@ final class NestLink {
         let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         if status == 401 { accessToken = nil }
         if status >= 400 {
-            let message = ((json["error"] as? [String: Any])?["message"] as? String) ?? "HTTP \(status)"
-            throw NestError.other(message)
+            let err = json["error"] as? [String: Any]
+            let message = (err?["message"] as? String) ?? "no details"
+            let code = (err?["status"] as? String).map { " \($0)" } ?? ""
+            throw NestError.other("HTTP \(status)\(code): \(message)")
         }
         return json
     }
@@ -673,7 +680,7 @@ final class NestLink {
     func startStream(offer: String) async throws -> (answer: String, session: String, expires: Date) {
         let r = try await command("GenerateWebRtcStream", ["offerSdp": offer])
         guard let answer = r["answerSdp"] as? String, let session = r["mediaSessionId"] as? String else {
-            throw NestError.other("Google didn't start the stream")
+            throw NestError.other("no answer in Google's reply (keys: \(r.keys.sorted()))")
         }
         let expires = (r["expiresAt"] as? String).flatMap(Self.parseDate) ?? Date().addingTimeInterval(300)
         return (answer, session, expires)
@@ -716,7 +723,15 @@ final class NestLink {
         while pulling {
             let started = Date()
             do {
-                if !listedDevices { try await listDevices() }
+                if !listedDevices && Date() >= nextDeviceList {
+                    do { try await listDevices() }
+                    catch NestError.notLinked { throw NestError.notLinked }
+                    catch {
+                        // Keep listening for alerts anyway; try the list again in a minute.
+                        DebugLog.write("nest device list failed: \(error)")
+                        nextDeviceList = Date().addingTimeInterval(60)
+                    }
+                }
                 let json = try await call("https://pubsub.googleapis.com/v1/\(cfg.subscription):pull",
                                           body: ["maxMessages": 20])
                 lastCheck = Date()
@@ -2142,6 +2157,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         return "Watching your front door"
     }
 
+    // Google refused the last request for video (its error, not ours).
+    var googleVideoDown: Bool {
+        guard let engine, engine.running, !engine.isReady, let e = engine.lastError else { return false }
+        return e.hasPrefix("Google didn't start the stream")
+    }
+
     var menuStatusLine: (String, Color) {
         var bits: [String] = []
         let color: Color
@@ -2151,7 +2172,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         case .problem: bits.append("Nest needs attention"); color = .red
         case .notLinked, .notConfigured: bits.append("Page check"); color = needsSignIn ? .red : .yellow
         }
-        if engine?.running == true { bits.append(engine.isReady ? "Recording 24/7" : "Starting recording…") }
+        if engine?.running == true {
+            bits.append(engine.isReady ? "Recording 24/7" : googleVideoDown ? "Google isn't sending video" : "Starting recording…")
+        }
         return (bits.joined(separator: " · "), popMode == .off ? .secondary : color)
     }
 
@@ -2192,6 +2215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         } else {
             let (symbol, message): (String, String) =
                 showingElsewhere ? ("pip", "Your door is showing in the Live View window") :
+                googleVideoDown ? ("exclamationmark.icloud", "Google's Nest service isn't sending video right now. Doorman keeps trying and will reconnect on its own.") :
                 engine?.running == true ? ("video", "Connecting to your doorbell…") :
                 ("video.slash", "The live picture isn't available right now")
             let placeholder = NSHostingView(rootView: MenuLivePlaceholder(symbol: symbol, message: message))
